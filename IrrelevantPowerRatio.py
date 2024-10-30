@@ -31,4 +31,4 @@ class IrrelevantPowerRatio(nn.Module):
         for ii in range(len(denom)):
             if denom[ii] > 0:
                 energy_ratio[ii] = zero_energy[ii] / denom[ii]
-        return energy_ratio
+        return energy_ratio # torch.Size([2]) 2是batch_szie的大小

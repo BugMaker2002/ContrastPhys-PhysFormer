@@ -1,5 +1,6 @@
 import numpy as np
 import h5py
+from torch import nn
 import torch
 from PhysNetModel import PhysNet
 from utils_data import *
@@ -7,6 +8,9 @@ from utils_sig import *
 from sacred import Experiment
 from sacred.observers import FileStorageObserver
 import json
+from scipy.stats import pearsonr
+from UniFormer import Uniformer
+from Physformer import ViT_ST_ST_Compact3_TDC_gra_sharp
 
 ex = Experiment('model_pred', save_git_info=False)
 
@@ -14,8 +18,9 @@ ex = Experiment('model_pred', save_git_info=False)
 def my_config():
     e = 29 # the model checkpoint at epoch e
     train_exp_num = 1 # the training experiment number
-    train_exp_dir = './results/%d'%train_exp_num # training experiment directory
-    time_interval = 30 # get rppg for 30s video clips, too long clips might cause out of memory
+    train_exp_dir = './results_physformer/%d'%train_exp_num # training experiment directory
+    time_interval = 160 / 30
+    T = 160 
 
     ex.observers.append(FileStorageObserver(train_exp_dir))
 
@@ -29,6 +34,8 @@ def my_config():
 
 @ex.automain
 def my_main(_run, e, train_exp_dir, device, time_interval):
+    
+    T = 160 
 
     # load test file paths
     test_list = list(np.load(train_exp_dir + '/test_list.npy'))
@@ -37,47 +44,49 @@ def my_main(_run, e, train_exp_dir, device, time_interval):
     with open(train_exp_dir+'/config.json') as f:
         config_train = json.load(f)
 
-    model = PhysNet(config_train['S'], config_train['in_ch']).to(device).eval()
-    model.load_state_dict(torch.load(train_exp_dir+'/epoch%d.pt'%(e), map_location=device)) # load weights to the model
+    model = ViT_ST_ST_Compact3_TDC_gra_sharp(S=4, dim=96, ff_dim=144, num_heads=4, num_layers=12, 
+                                             image_size=(160, 128, 128), patches=(4, 4, 4), theta=0.7, 
+                                             dropout_rate=0.1).to(device).eval()
+    
+    model.load_state_dict(torch.load("/share1/home/zhouwenqing/rPPG-Toolbox/final_model_release/UBFC-rPPG_PhysFormer_DiffNormalized.pth", map_location=device))
+    # model.load_state_dict(torch.load(train_exp_dir+'/epoch%d.pt'%(e), map_location=device)) # load weights to the model
 
     @torch.no_grad()
     def dl_model(imgs_clip):
         # model inference
         img_batch = imgs_clip
         img_batch = img_batch.transpose((3,0,1,2))
+        # 在img_batch前面新增了一个批量大小的维度（批量大小为1）
         img_batch = img_batch[np.newaxis].astype('float32')
         img_batch = torch.tensor(img_batch).to(device)
 
-        rppg = model(img_batch)[:,-1, :]
+        rppg = model(img_batch, 2.0)[:,-1, :] # (1, 5, T) -> (1, T)
         rppg = rppg[0].detach().cpu().numpy()
         return rppg
 
+    
     for h5_path in test_list:
         h5_path = str(h5_path)
 
         with h5py.File(h5_path, 'r') as f:
             imgs = f['imgs']
-            bvp = f['bvp']
-            # bvppeak = f['bvp_peak']
-            fs = config_train['fs']
-
-            duration = np.min([imgs.shape[0], bvp.shape[0]]) / fs
-            num_blocks = int(duration // time_interval)
-
+            subject_name = os.path.basename(h5_path)[:-3]
+            bvp_path = f"/share2/data/zhouwenqing/UBFC_rPPG/dataset2/{subject_name}/ground_truth.txt"
+            bvp = np.loadtxt(bvp_path).reshape((-1, 1))
+            num_blocks = int(np.min([imgs.shape[0], bvp.shape[0]]) // T)
+            # 从整个视频当中截取出num_blocks个视频片段，这些片段之间是连续的（指从原视频当中截取的方式）
             rppg_list = []
             bvp_list = []
             # bvppeak_list = []
-
             for b in range(num_blocks):
-                rppg_clip = dl_model(imgs[b*time_interval*fs:(b+1)*time_interval*fs])
+                rppg_clip = dl_model(imgs[b*T:(b+1)*T])
                 rppg_list.append(rppg_clip)
 
-                bvp_list.append(bvp[b*time_interval*fs:(b+1)*time_interval*fs])
-                # bvppeak_list.append(bvppeak[b*time_interval*fs:(b+1)*time_interval*fs])
+                bvp_list.append(bvp[b*T:(b+1)*T])
 
             rppg_list = np.array(rppg_list)
             bvp_list = np.array(bvp_list)
-            # bvppeak_list = np.array(bvppeak_list)
-            # results = {'rppg_list': rppg_list, 'bvp_list': bvp_list, 'bvppeak_list':bvppeak_list}
+
             results = {'rppg_list': rppg_list, 'bvp_list': bvp_list}
             np.save(pred_exp_dir+'/'+h5_path.split('/')[-1][:-3], results)
+            

@@ -87,6 +87,10 @@ def hr_fft_batch(sig_list, fs, harmonics_removal=True):
         peak_idx, _ = signal.find_peaks(sig_f)
         sort_idx = np.argsort(sig_f[peak_idx])
         sort_idx = sort_idx[::-1]
+        
+        print(len(peak_idx))
+        print(sort_idx[0])
+        print(sort_idx[1])
 
         peak_idx1 = peak_idx[sort_idx[0]]
         peak_idx2 = peak_idx[sort_idx[1]]

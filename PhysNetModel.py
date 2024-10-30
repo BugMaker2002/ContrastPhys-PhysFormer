@@ -87,7 +87,7 @@ class PhysNet(nn.Module):
         x = (x - means) / stds # (B, C, T, 128, 128)
  
         parity = []
-        x = self.start(x) # (B, C, T, 128, 128)
+        x = self.start(x) # (B, 32, T, 128, 128)
         x = self.loop1(x) # (B, 64, T, 64, 64)
         parity.append(x.size(2) % 2)
         x = self.encoder1(x) # (B, 64, T/2, 32, 32)
@@ -95,19 +95,23 @@ class PhysNet(nn.Module):
         x = self.encoder2(x) # (B, 64, T/4, 16, 16)
         x = self.loop4(x) # (B, 64, T/4, 8, 8)
 
+        # 在(C, H, W)维度上分别进行倍数为(2, 1, 1)的插值
         x = F.interpolate(x, scale_factor=(2, 1, 1)) # (B, 64, T/2, 8, 8)
         x = self.decoder1(x) # (B, 64, T/2, 8, 8)
-        x = F.pad(x, (0,0,0,0,0,parity[-1]), mode='replicate')
+        x = F.pad(x, (0,0,0,0,0,parity[-1]), mode='replicate') # (B, 64, T/2, 8, 8)
         x = F.interpolate(x, scale_factor=(2, 1, 1)) # (B, 64, T, 8, 8)
         x = self.decoder2(x) # (B, 64, T, 8, 8)
-        x = F.pad(x, (0,0,0,0,0,parity[-2]), mode='replicate')
+        x = F.pad(x, (0,0,0,0,0,parity[-2]), mode='replicate') # (B, 64, T, 8, 8)
         x = self.end(x) # (B, 1, T, S, S), ST-rPPG block
 
         x_list = []
         for a in range(self.S):
             for b in range(self.S):
                 x_list.append(x[:,:,:,a,b]) # (B, 1, T)
-
-        x = sum(x_list)/(self.S*self.S) # (B, 1, T)
+        # print("---------len(x_list): ", len(x_list)) # len(x_list): 4
+        # print("---------x.shape (in list): ", x_list[0].shape) # torch.Size([2, 1, 300])
+        x = sum(x_list)/(self.S*self.S) # (B, 1, T) 
+        # print("---------x.shape (after normalize): ", x.shape) # torch.Size([2, 1, 300])
         X = torch.cat(x_list+[x], 1) # (B, M, T), flatten all spatial signals to the second dimension
+        # print("---------X.shape: ", X.shape) # torch.Size([2, 5, 300])
         return X
